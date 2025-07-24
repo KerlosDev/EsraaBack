@@ -86,6 +86,15 @@ exports.signIn = expressAsyncHandler(async (req, res) => {
         return res.status(401).json({ message: 'كلمة المرور غير صحيحة' });
     }
 
+    // Check if user is banned
+    if (user.isBanned) {
+        return res.status(403).json({
+            message: user.banReason || 'تم حظر حسابك من المنصة. يرجى التواصل مع الإدارة.',
+            code: 'USER_BANNED',
+            isBanned: true
+        });
+    }
+
     // Generate new session token for single device login
     const sessionToken = crypto.randomBytes(32).toString('hex');
     const deviceInfo = req.headers['user-agent'] || 'Unknown Device';
@@ -165,6 +174,15 @@ exports.protect = expressAsyncHandler(async (req, res, next) => {
 
         if (!user) {
             return res.status(401).json({ message: "User not found" });
+        }
+
+        // Check if user is banned
+        if (user.isBanned) {
+            return res.status(403).json({
+                message: user.banReason || 'تم حظر حسابك من المنصة. يرجى التواصل مع الإدارة.',
+                code: "USER_BANNED",
+                isBanned: true
+            });
         }
 
         // Check if session token matches (single device login validation)
