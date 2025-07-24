@@ -28,7 +28,7 @@ dbconnection();
 
 // ✅ Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "https://www.hossammirah.com"],
+  origin: ["http://localhost:3000", "https://esraaelbialy.site"],
   credentials: true,
 }));
 
