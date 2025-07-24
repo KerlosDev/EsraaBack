@@ -50,6 +50,7 @@ app.use('/stats', statsRoutes);
 app.use('/books', bookRoutes);
 app.use('/book-orders', bookOrderRoutes);
 app.use('/course-analytics', courseAnalyticsRoutes);
+app.use('/course-data', courseWithEnrollmentRoutes);
 
 app.listen(PORT, () => {
   console.log(`The server is running on port ${PORT}`);

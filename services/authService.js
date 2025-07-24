@@ -224,3 +224,54 @@ exports.isAllow = (...roles) => {
 
 exports.isAdmin = exports.isAllow('admin');
 exports.isAdminOrInstructor = exports.isAllow('admin', 'instructor');
+
+// Optional authentication middleware - allows both authenticated and non-authenticated users
+exports.optionalAuth = expressAsyncHandler(async (req, res, next) => {
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+        token = req.headers.authorization.split(" ")[1];
+    }
+
+    // If no token, continue without user data
+    if (!token) {
+        req.user = null;
+        return next();
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await User.findById(decoded.id).select("-password");
+
+        if (!user) {
+            req.user = null;
+            return next();
+        }
+
+        // Check if user is banned
+        if (user.isBanned) {
+            req.user = null;
+            return next();
+        }
+
+        // Check if session token matches (single device login validation)
+        if (!decoded.sessionToken || decoded.sessionToken !== user.currentSessionToken) {
+            req.user = null;
+            return next();
+        }
+
+        // Update last active time
+        user.lastActive = new Date();
+        await user.save();
+
+        req.user = {
+            _id: user._id,
+            ...user.toObject(),
+            role: user.role
+        };
+        next();
+    } catch (error) {
+        // If token is invalid, continue without user data
+        req.user = null;
+        next();
+    }
+});
