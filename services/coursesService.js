@@ -63,8 +63,10 @@ const getCourses = async (req, res) => {
   // Only return published courses (not drafts) for frontend
   const courses = await Course.find({
     isDraft: false,
-    publishStatus: { $ne: "published" }
+    publishStatus: "published"
   }).skip(skip).limit(parseInt(limit));
+
+  console.log("جلب الكورسات:", courses);
 
   res.status(200).json({
     results: courses.length,
@@ -153,7 +155,7 @@ const getAllCoursesForAdmin = async (req, res) => {
     const course = await Course.findOne({
       _id: id,
       isDraft: false,
-      publishStatus: { $ne: "published" }
+      publishStatus: "published"
     })
       .populate({
         path: 'chapters',
