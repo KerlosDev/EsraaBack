@@ -68,8 +68,7 @@ const getCourses = async (req, res) => {
     ]
   }).skip(skip).limit(parseInt(limit));
 
-
-  console.log("جلب الكورسات:", courses);
+  console.log("Fetched courses:", courses);
 
   res.status(200).json({
     results: courses.length,
@@ -82,14 +81,16 @@ const getCourses = async (req, res) => {
 
 const getAllCoursesForAdmin = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
+    const courses = await Course.find({
 
-    const courses = await Course.find().skip(skip).limit(parseInt(limit));
+
+    })
+      .sort({ createdAt: -1 });
+
     res.status(200).json({
-      results: courses.length,
-      page: +page,
-      courses,
+      success: true,
+      count: courses.length,
+      courses
     });
   } catch (error) {
     console.error("Get All Courses Error:", error);
@@ -157,7 +158,7 @@ const getCourseById = async (req, res) => {
 
   const course = await Course.findOne({
     _id: id,
-    $or: [
+      $or: [
       { isDraft: false },
       { publishStatus: "published" }
     ]

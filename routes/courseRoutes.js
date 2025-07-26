@@ -44,7 +44,7 @@ router.delete("/:id", protect, isAdmin, async (req, res) => {
 });
 
 router.get("/", checkScheduledCourses, getCourses);
-router.get("/allCourses", protect, isAdmin, checkScheduledCourses, getAllCoursesForAdmin);
+router.get("/allCourses", protect, isAdmin, getAllCoursesForAdmin);
 router.get("/check-scheduled", async (req, res) => {
   try {
     const publishedCount = await checkAndPublishScheduledCourses();

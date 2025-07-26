@@ -64,14 +64,49 @@ const getCourseWithEnrollmentCheck = async (req, res) => {
         let enrollmentData = null;
 
         if (userId) {
+            // Check direct course enrollment
             const enrollment = await enrollmentModel.findOne({
                 studentId: userId,
                 courseId: courseId,
                 paymentStatus: "paid"
             });
 
-            isEnrolled = !!enrollment;
-            enrollmentData = enrollment;
+            if (enrollment) {
+                isEnrolled = true;
+                enrollmentData = enrollment;
+            } else {
+                // Check if course is part of an enrolled package
+                try {
+                    const { checkCourseInPackageEnrollment } = require('./packageEnrollmentService');
+                    const hasPackageAccess = await checkCourseInPackageEnrollment(userId, courseId);
+
+                    if (hasPackageAccess) {
+                        isEnrolled = true;
+                        // Find the package enrollment for reference
+                        const packageEnrollments = await enrollmentModel.find({
+                            studentId: userId,
+                            isPackage: true,
+                            paymentStatus: "paid"
+                        }).populate('packageId');
+
+                        for (const pkgEnrollment of packageEnrollments) {
+                            if (pkgEnrollment.packageId &&
+                                pkgEnrollment.packageId.courses &&
+                                pkgEnrollment.packageId.courses.some(c => c.toString() === courseId.toString())) {
+                                enrollmentData = {
+                                    ...pkgEnrollment.toObject(),
+                                    fromPackage: true,
+                                    packageName: pkgEnrollment.packageId.name
+                                };
+                                break;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error("Package enrollment check error:", error);
+                    // Continue with normal flow, assuming no package enrollment
+                }
+            }
         }
 
         // Prepare course data based on enrollment status

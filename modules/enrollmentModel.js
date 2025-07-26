@@ -9,7 +9,14 @@ const enrollmentSchema = new mongoose.Schema({
     courseId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Course",
-        required: true,
+    },
+    packageId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Package",
+    },
+    isPackage: {
+        type: Boolean,
+        default: false,
     },
     price: {
         type: Number,

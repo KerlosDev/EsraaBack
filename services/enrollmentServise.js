@@ -95,15 +95,65 @@ exports.getEnrollById = async (req, res) => {
 exports.getAllUserErnollemnts = async (req, res) => {
     try {
         const studentId = req.user._id;
-        const coursesAreEnrolled = await enrollmentModel.find({
+
+        // Get directly enrolled courses
+        const directCourseEnrollments = await enrollmentModel.find({
             studentId,
-            paymentStatus: "paid"
-        }).populate('courseId');
+            paymentStatus: "paid",
+            isPackage: { $ne: true } // Exclude package enrollments
+        }).populate({
+            path: 'courseId',
+            populate: [
+                { path: 'chapters', select: 'title description' },
+                { path: 'exams', select: 'title' }
+            ]
+        });
+
+        // Get courses through packages
+        const packageEnrollments = await enrollmentModel.find({
+            studentId,
+            paymentStatus: "paid",
+            isPackage: true
+        }).populate({
+            path: 'packageId',
+            select: '_id name description imageUrl price',
+            populate: {
+                path: 'courses',
+                select: '_id name description imageUrl level price',
+                populate: [
+                    { path: 'chapters', select: 'title description' },
+                    { path: 'exams', select: 'title' }
+                ]
+            }
+        });
+
+        // Extract courses from packages
+        let packageCourses = [];
+        packageEnrollments.forEach(enrollment => {
+            if (enrollment.packageId && enrollment.packageId.courses) {
+                // Create enrollment-like objects for each course in the package
+                enrollment.packageId.courses.forEach(course => {
+                    packageCourses.push({
+                        _id: `pkg_${enrollment._id}_course_${course._id}`, // Create a unique ID
+                        studentId: studentId,
+                        courseId: course,
+                        enrolledAt: enrollment.createdAt,
+                        paymentStatus: 'paid',
+                        fromPackage: true,
+                        packageId: enrollment.packageId._id,
+                        packageName: enrollment.packageId.name
+                    });
+                });
+            }
+        });
+
+        // Combine both types of enrollments
+        const allEnrollments = [...directCourseEnrollments, ...packageCourses];
 
         // Always return an array, even if empty
         return res.status(200).json({
-            coursesAreEnrolled: coursesAreEnrolled || [],
-            isHeEnrolled: coursesAreEnrolled && coursesAreEnrolled.length > 0
+            coursesAreEnrolled: allEnrollments || [],
+            isHeEnrolled: allEnrollments && allEnrollments.length > 0
         });
     } catch (error) {
         console.error("Enrollment Check Error:", error);
@@ -130,6 +180,7 @@ exports.updatePaymentStatus = async (req, res) => {
         // Find enrollment without updating it first
         const enrollment = await enrollmentModel.findById(id)
             .populate('courseId')
+            .populate('packageId')
             .populate('studentId', 'email phoneNumber');
 
         if (!enrollment) {
@@ -148,18 +199,30 @@ exports.updatePaymentStatus = async (req, res) => {
                 runValidators: false // Skip validation since we're keeping existing data
             }
         ).populate('courseId')
+            .populate('packageId')
             .populate('studentId', 'email phoneNumber');
+
+        // Determine if it's a package or course enrollment
+        const isPackage = updatedEnrollment.isPackage || false;
 
         const formattedEnrollment = {
             _id: updatedEnrollment._id,
-            userEmail: updatedEnrollment.studentId.email,
-            phoneNumber: updatedEnrollment.studentId.phoneNumber,
-            courseName: updatedEnrollment.courseId.name,
-            courseId: updatedEnrollment.courseId._id,
+            userEmail: updatedEnrollment.studentId?.email || 'N/A',
+            phoneNumber: updatedEnrollment.studentId?.phoneNumber || 'N/A',
+            isPackage: isPackage,
             price: updatedEnrollment.price,
             paymentStatus: updatedEnrollment.paymentStatus,
             createdAt: updatedEnrollment.createdAt
         };
+
+        // Add course or package info based on enrollment type
+        if (isPackage && updatedEnrollment.packageId) {
+            formattedEnrollment.packageName = updatedEnrollment.packageId.name || 'N/A';
+            formattedEnrollment.packageId = updatedEnrollment.packageId._id;
+        } else if (updatedEnrollment.courseId) {
+            formattedEnrollment.courseName = updatedEnrollment.courseId.name || 'N/A';
+            formattedEnrollment.courseId = updatedEnrollment.courseId._id;
+        }
 
         res.status(200).json({
             success: true,
@@ -228,9 +291,15 @@ exports.getAllEnrollments = async (req, res) => {
                 name: { $regex: searchQuery, $options: 'i' }
             }).distinct('_id');
 
+            const Package = require("../modules/packageModel");
+            const packageIds = await Package.find({
+                name: { $regex: searchQuery, $options: 'i' }
+            }).distinct('_id');
+
             countQuery = countQuery.or([
                 { studentId: { $in: studentIds } },
-                { courseId: { $in: courseIds } }
+                { courseId: { $in: courseIds } },
+                { packageId: { $in: packageIds } }
             ]);
         }
 
@@ -239,6 +308,7 @@ exports.getAllEnrollments = async (req, res) => {
         // Build the main query
         let query = enrollmentModel.find(filter)
             .populate('courseId')
+            .populate('packageId')
             .populate('studentId', 'email phoneNumber name')
             .sort(sortOptions)
             .skip(skip)
@@ -258,25 +328,49 @@ exports.getAllEnrollments = async (req, res) => {
                 name: { $regex: searchQuery, $options: 'i' }
             }).distinct('_id');
 
+            const Package = require("../modules/packageModel");
+            const packageIds = await Package.find({
+                name: { $regex: searchQuery, $options: 'i' }
+            }).distinct('_id');
+
             query = query.or([
                 { studentId: { $in: studentIds } },
-                { courseId: { $in: courseIds } }
+                { courseId: { $in: courseIds } },
+                { packageId: { $in: packageIds } }
             ]);
         }
 
         const enrollments = await query;
 
-        const formattedEnrollments = enrollments.map(enrollment => ({
-            _id: enrollment._id,
-            userEmail: enrollment.studentId?.email || 'N/A',
-            phoneNumber: enrollment.phoneNumber,
-            studentName: enrollment.studentId?.name || 'N/A',
-            courseName: enrollment.courseId?.name || 'N/A',
-            courseId: enrollment.courseId?._id || null,
-            price: enrollment.price,
-            paymentStatus: enrollment.paymentStatus,
-            createdAt: enrollment.createdAt
-        }));
+        const formattedEnrollments = enrollments.map(enrollment => {
+            if (enrollment.isPackage) {
+                return {
+                    _id: enrollment._id,
+                    userEmail: enrollment.studentId?.email || 'N/A',
+                    phoneNumber: enrollment.phoneNumber,
+                    studentName: enrollment.studentId?.name || 'N/A',
+                    packageName: enrollment.packageId?.name || 'N/A',
+                    packageId: enrollment.packageId?._id || null,
+                    isPackage: true,
+                    price: enrollment.price,
+                    paymentStatus: enrollment.paymentStatus,
+                    createdAt: enrollment.createdAt
+                };
+            } else {
+                return {
+                    _id: enrollment._id,
+                    userEmail: enrollment.studentId?.email || 'N/A',
+                    phoneNumber: enrollment.phoneNumber,
+                    studentName: enrollment.studentId?.name || 'N/A',
+                    courseName: enrollment.courseId?.name || 'N/A',
+                    courseId: enrollment.courseId?._id || null,
+                    isPackage: false,
+                    price: enrollment.price,
+                    paymentStatus: enrollment.paymentStatus,
+                    createdAt: enrollment.createdAt
+                };
+            }
+        });
 
         res.status(200).json({
             success: true,
@@ -401,6 +495,132 @@ exports.createEnrollmentByAdmin = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "حصل خطأ أثناء إضافة الاشتراك"
+        });
+    }
+};
+
+exports.getPackageCoursesForEnrolledUser = async (req, res) => {
+    try {
+        const studentId = req.user._id;
+        const { packageId } = req.params;
+
+        // Check if the package exists
+        const Package = require("../modules/packageModel");
+        const packageDetails = await Package.findById(packageId);
+        if (!packageDetails) {
+            return res.status(404).json({
+                success: false,
+                message: "الباقة غير موجودة"
+            });
+        }
+
+        // Check if the user is enrolled in this package
+        const packageEnrollment = await Enrollment.findOne({
+            studentId,
+            packageId,
+            isPackage: true,
+            paymentStatus: "paid"
+        });
+
+        if (!packageEnrollment) {
+            return res.status(403).json({
+                success: false,
+                message: "أنت غير مشترك في هذه الباقة",
+                isEnrolled: false
+            });
+        }
+
+        // Get all courses in the package
+        const packageWithCourses = await Package.findById(packageId)
+            .populate({
+                path: 'courses',
+                select: '_id name description imageUrl level price',
+                populate: [
+                    {
+                        path: 'chapters',
+                        select: 'title description videoUrl'
+                    },
+                    {
+                        path: 'exams',
+                        select: 'title'
+                    }
+                ]
+            });
+
+        res.status(200).json({
+            success: true,
+            message: "تم استرجاع الكورسات بنجاح",
+            isEnrolled: true,
+            packageName: packageWithCourses.name,
+            packageDescription: packageWithCourses.description,
+            courses: packageWithCourses.courses || []
+        });
+    } catch (error) {
+        console.error("Package Courses Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "حدث خطأ أثناء استرجاع الكورسات",
+            error: error.message
+        });
+    }
+};
+
+exports.getAllEnrolledPackagesWithCourses = async (req, res) => {
+    try {
+        const studentId = req.user._id;
+
+        // Get all packages the user is enrolled in
+        const packageEnrollments = await Enrollment.find({
+            studentId,
+            isPackage: true,
+            paymentStatus: "paid"
+        }).populate({
+            path: 'packageId',
+            select: '_id name description imageUrl price discountPercentage',
+            populate: {
+                path: 'courses',
+                select: '_id name description imageUrl level price',
+                populate: [
+                    {
+                        path: 'chapters',
+                        select: 'title description videoUrl'
+                    },
+                    {
+                        path: 'exams',
+                        select: 'title'
+                    }
+                ]
+            }
+        });
+
+        // Format the response
+        const formattedPackages = packageEnrollments.map(enrollment => {
+            if (!enrollment.packageId) return null;
+
+            return {
+                enrollmentId: enrollment._id,
+                packageId: enrollment.packageId._id,
+                packageName: enrollment.packageId.name,
+                packageDescription: enrollment.packageId.description,
+                packageImage: enrollment.packageId.imageUrl,
+                packagePrice: enrollment.packageId.price,
+                enrolledAt: enrollment.createdAt,
+                courses: enrollment.packageId.courses || []
+            };
+        }).filter(Boolean); // Remove null entries
+
+        res.status(200).json({
+            success: true,
+            message: "تم استرجاع الباقات والكورسات بنجاح",
+            hasEnrolledPackages: formattedPackages.length > 0,
+            packages: formattedPackages
+        });
+    } catch (error) {
+        console.error("Get Enrolled Packages Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "حدث خطأ أثناء استرجاع الباقات والكورسات",
+            error: error.message
         });
     }
 };
