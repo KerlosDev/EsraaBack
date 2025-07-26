@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
 const userRoutes = require("./routes/userRoutes");
 const authRoutes = require("./routes/authRoutes");
 const activitionRoutes = require("./routes/activitionRoutes");
+const activePackageRoutes = require("./routes/activePackageRoutes");
 const chapterRoutes = require("./routes/chapterRoutes");
 const examRoutes = require("./routes/examRoutes");
 const courseRoutes = require("./routes/courseRoutes");
@@ -37,6 +38,7 @@ app.use(cors({
 app.use(express.json());
 
 app.use('/auth', authRoutes);
+app.use('/active-package', activePackageRoutes);
 app.use('/active', activitionRoutes);
 app.use('/chapter', chapterRoutes);
 app.use('/exam', examRoutes);
