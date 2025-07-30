@@ -299,7 +299,10 @@ exports.getAllEnrollments = async (req, res) => {
             countQuery = countQuery.or([
                 { studentId: { $in: studentIds } },
                 { courseId: { $in: courseIds } },
-                { packageId: { $in: packageIds } }
+                { packageId: { $in: packageIds } },
+                { phoneNumber: { $regex: searchQuery, $options: 'i' } }
+
+
             ]);
         }
 

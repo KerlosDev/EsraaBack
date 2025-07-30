@@ -21,8 +21,10 @@ const bookRoutes = require("./routes/bookRoutes");
 const bookOrderRoutes = require("./routes/bookOrderRoutes");
 const courseAnalyticsRoutes = require("./routes/courseAnalyticsRoutes");
 const courseWithEnrollmentRoutes = require("./routes/courseWithEnrollmentRoutes");
- const packageRoutes = require("./routes/packageRoutes");
- 
+const packageRoutes = require("./routes/packageRoutes");
+const dashboardStatsRoutes = require("./routes/dashboardStatsRoutes");
+
+
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -41,6 +43,7 @@ app.use('/auth', authRoutes);
 app.use('/active-package', activePackageRoutes);
 app.use('/active', activitionRoutes);
 app.use('/chapter', chapterRoutes);
+app.use('/dashboard', dashboardStatsRoutes);
 app.use('/exam', examRoutes);
 app.use('/course', courseRoutes);
 app.use('/user', userRoutes);
@@ -55,7 +58,7 @@ app.use('/books', bookRoutes);
 app.use('/book-orders', bookOrderRoutes);
 app.use('/course-analytics', courseAnalyticsRoutes);
 app.use('/course-data', courseWithEnrollmentRoutes);
-app.use('/packages', packageRoutes); 
+app.use('/packages', packageRoutes);
 
 
 app.listen(PORT, () => {

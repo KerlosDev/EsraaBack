@@ -46,7 +46,7 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
 
         // Get students with pagination
         const students = await User.find(searchQuery)
-            .select('name phoneNumber parentPhoneNumber email')
+            .select('name phoneNumber parentPhoneNumber email lastActive')
             .lean()
             .skip(skip)
             .limit(limit);
@@ -62,21 +62,105 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
             });
         }
 
+        const Package = require("../modules/packageModel");
         const studentsStatus = await Promise.all(students.map(async (student) => {
-            // Check enrollments for paid courses
+            // Get all enrollments (courses and packages)
             const enrollments = await Enrollment.find({
                 studentId: student._id,
-            }).populate('courseId', 'name') || [];
+            })
+                .populate({
+                    path: 'courseId',
+                    populate: {
+                        path: 'chapters',
+                        model: 'Chapter',
+                        populate: {
+                            path: 'lessons',
+                            model: 'Lesson'
+                        }
+                    }
+                })
+                .populate({
+                    path: 'packageId',
+                    populate: {
+                        path: 'courses',
+                        model: 'Course',
+                        populate: {
+                            path: 'chapters',
+                            model: 'Chapter',
+                            populate: {
+                                path: 'lessons',
+                                model: 'Lesson'
+                            }
+                        }
+                    }
+                }) || [];
 
             // Check watch history
             const watchHistory = await WatchHistory.find({ studentId: student._id }) || [];
 
-            // Get enrolled course names
-            const enrolledCourses = enrollments.map(enrollment => ({
-                courseName: enrollment.courseId ? enrollment.courseId.name : 'Unknown Course',
-                enrollmentDate: enrollment.createdAt,
-                paymentStatus: enrollment.paymentStatus
+            // Separate direct course enrollments and package enrollments
+            const directCourseEnrollments = enrollments.filter(e => e.courseId && !e.isPackage);
+            const packageEnrollments = enrollments.filter(e => e.packageId && e.isPackage);
+
+            // Get enrolled courses from direct enrollments
+            const directCourses = await Promise.all(directCourseEnrollments.map(async enrollment => {
+                const course = enrollment.courseId;
+                if (!course) {
+                    return {
+                        courseName: 'Unknown Course',
+                        enrollmentDate: enrollment.createdAt,
+                        paymentStatus: enrollment.paymentStatus,
+                        chapters: []
+                    };
+                }
+                const chapters = (course.chapters || []).map(chapter => ({
+                    chapterTitle: chapter.title,
+                    chapterDescription: chapter.description,
+                    lessons: (chapter.lessons || []).map(lesson => ({
+                        lessonTitle: lesson.title,
+                        lessonDescription: lesson.description,
+                        isWatched: watchHistory.some(wh => wh.lessonId.toString() === lesson._id.toString()),
+                        watchCount: watchHistory.filter(wh => wh.lessonId.toString() === lesson._id.toString()).length
+                    }))
+                }));
+                return {
+                    courseName: course.name,
+                    enrollmentDate: enrollment.createdAt,
+                    paymentStatus: enrollment.paymentStatus,
+                    chapters: chapters
+                };
             }));
+
+            // Get enrolled courses from package enrollments
+            const packageCourses = [];
+            for (const pkgEnrollment of packageEnrollments) {
+                const pkg = pkgEnrollment.packageId;
+                if (pkg && Array.isArray(pkg.courses)) {
+                    for (const course of pkg.courses) {
+                        const chapters = (course.chapters || []).map(chapter => ({
+                            chapterTitle: chapter.title,
+                            chapterDescription: chapter.description,
+                            lessons: (chapter.lessons || []).map(lesson => ({
+                                lessonTitle: lesson.title,
+                                lessonDescription: lesson.description,
+                                isWatched: watchHistory.some(wh => wh.lessonId.toString() === lesson._id.toString()),
+                                watchCount: watchHistory.filter(wh => wh.lessonId.toString() === lesson._id.toString()).length
+                            }))
+                        }));
+                        packageCourses.push({
+                            courseName: course.name,
+                            enrollmentDate: pkgEnrollment.createdAt,
+                            paymentStatus: pkgEnrollment.paymentStatus,
+                            chapters: chapters,
+                            fromPackage: true,
+                            packageName: pkg.name || undefined
+                        });
+                    }
+                }
+            }
+
+            // Combine all enrolled courses (direct + from packages)
+            const enrolledCourses = [...directCourses, ...packageCourses];
 
             // Determine status based on both enrollment and watch history
             let status = 'not enrolled';
@@ -91,14 +175,15 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
                 studentInfo: {
                     id: student._id,
                     name: student.name,
+                    lastActivity: student.lastActive || student.createdAt,
                     email: student.email,
                     phoneNumber: student.phoneNumber || 'Not provided',
                     parentPhoneNumber: student.parentPhoneNumber || 'Not provided'
                 },
                 enrollmentStatus: {
-                    isEnrolled: enrollments.length > 0,
+                    isEnrolled: enrolledCourses.length > 0,
                     enrolledCourses: enrolledCourses,
-                    totalEnrollments: enrollments.length
+                    totalEnrollments: enrolledCourses.length
                 },
                 activityStatus: {
                     status: status,

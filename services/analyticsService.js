@@ -86,7 +86,7 @@ exports.getStudentProgress = async (req, res) => {
     }
 };
 
-exports.getAllStudentsProgress = async (req, res) => {
+exports.getAllStudentsProgress = async (req, res, returnData = false) => {
     try {
         // Get all students who have watch history
         const studentsWithHistory = await WatchHistory.distinct('studentId');
@@ -98,6 +98,8 @@ exports.getAllStudentsProgress = async (req, res) => {
                 .populate('chapterId', 'title');
             const examResults = await StudentExamResult.findOne({ studentId });
 
+            // Optionally, you can add a progress field here for completionRate calculation
+            // For now, let's add a dummy progress value (e.g., 100 for demo)
             return {
                 student,
                 stats: {
@@ -108,21 +110,29 @@ exports.getAllStudentsProgress = async (req, res) => {
                     averageScore: examResults ?
                         examResults.results.reduce((sum, exam) =>
                             sum + (exam.correctAnswers / exam.totalQuestions), 0) / examResults.results.length : 0
-                }
+                },
+                progress: 100 // TODO: Replace with real progress calculation if available
             };
         }));
 
-        res.status(200).json({
-            success: true,
-            data: studentsProgress
-        });
-
+        if (returnData) {
+            return studentsProgress;
+        } else {
+            res.status(200).json({
+                success: true,
+                data: studentsProgress
+            });
+        }
     } catch (error) {
         console.error('Error fetching all students progress:', error);
-        res.status(500).json({
-            success: false,
-            message: 'حدث خطأ أثناء جلب تقدم الطلاب'
-        });
+        if (returnData) {
+            return [];
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'حدث خطأ أثناء جلب تقدم الطلاب'
+            });
+        }
     }
 };
 
@@ -136,6 +146,34 @@ exports.getNewStudentsCount = async (days = 7) => {
     });
 
     return newStudents;
+};
+
+exports.getStudentSignupsByDay = async (days = 30) => {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
+
+    const signups = await User.aggregate([
+        {
+            $match: {
+                role: 'user',
+                createdAt: { $gte: startDate }
+            }
+        },
+        {
+            $group: {
+                _id: {
+                    $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                },
+                count: { $sum: 1 }
+            }
+        },
+        {
+            $sort: { "_id": 1 }
+        }
+    ]);
+
+    return signups;
 };
 
 exports.calculateTotalRevenue = async () => {
@@ -161,7 +199,9 @@ exports.getPendingEnrollments = async () => {
 exports.getStudentsAnalytics = async () => {
     try {
         const oneWeekAgo = new Date();
+        const oneMonthAgo = new Date();
         oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
         // Get total counts
         const totalStudents = await User.countDocuments({ role: 'user' });
@@ -171,6 +211,42 @@ exports.getStudentsAnalytics = async () => {
             role: 'user',
             lastActive: { $gte: oneWeekAgo }
         });
+
+        // Get monthly active users
+        const monthlyActiveUsers = await User.countDocuments({
+            role: 'user',
+            lastActive: { $gte: oneMonthAgo }
+        });
+
+        // Get student engagement metrics
+        const highEngagementUsers = await WatchHistory.aggregate([
+            {
+                $group: {
+                    _id: '$studentId',
+                    totalWatched: { $sum: '$watchedCount' }
+                }
+            },
+            { $match: { totalWatched: { $gt: 10 } } },
+            { $count: 'count' }
+        ]);
+
+        // Get average exam scores
+        const examScores = await StudentExamResult.aggregate([
+            { $unwind: '$results' },
+            {
+                $group: {
+                    _id: null,
+                    averageScore: {
+                        $avg: {
+                            $multiply: [
+                                { $divide: ['$results.correctAnswers', '$results.totalQuestions'] },
+                                100
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
 
         // Get government distribution
         const governmentDistribution = await User.aggregate([
@@ -193,6 +269,9 @@ exports.getStudentsAnalytics = async () => {
             activeStudents,
             bannedStudents,
             lastWeekActive,
+            monthlyActiveUsers,
+            highEngagement: highEngagementUsers[0]?.count || 0,
+            averageExamScore: Math.round(examScores[0]?.averageScore || 0),
             governmentDistribution,
             levelDistribution
         };
