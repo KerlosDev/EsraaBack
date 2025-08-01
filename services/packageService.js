@@ -2,6 +2,29 @@ const expressAsyncHandler = require("express-async-handler");
 const Package = require("../modules/packageModel");
 const Course = require("../modules/courseModule");
 const mongoose = require("mongoose");
+const axios = require("axios");
+
+const uploadToImgBB = async (buffer) => {
+    try {
+        const apiKey = process.env.IMGBB_API_KEY || '192530c1c337c43e5cc555d3dfd0ec3d';
+        const base64Image = buffer.toString('base64');
+
+        const formData = new URLSearchParams();
+        formData.append('key', apiKey);
+        formData.append('image', base64Image);
+
+        const response = await axios.post("https://api.imgbb.com/1/upload", formData, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+        });
+
+        return response.data.data.url;
+    } catch (error) {
+        console.error("ImgBB Upload Error:", error.response?.data || error.message);
+        throw new Error("فشل رفع صورة الكورس إلى ImgBB");
+    }
+};
 
 // Get all packages
 const getAllPackages = async (req, res) => {
@@ -66,8 +89,14 @@ const getPackageById = async (req, res) => {
 // Create new package
 const createPackage = async (req, res) => {
     try {
-        const { name, description, imageUrl, price, courses, level } = req.body;
+        const { name, description, price, courses, level } = req.body;
 
+        let imageUrl = null;
+        if (req.file) {
+            imageUrl = await uploadToImgBB(req.file.buffer);
+        } else if (req.body.imageUrl) {
+            imageUrl = req.body.imageUrl;
+        }
         // Validate courses exist
         if (!courses || !Array.isArray(courses) || courses.length < 2) {
             return res.status(400).json({
@@ -123,8 +152,16 @@ const createPackage = async (req, res) => {
 const updatePackage = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description, imageUrl, price, courses, level, isDraft, publishStatus } = req.body;
+        const { name, description, price, courses, level, isDraft, publishStatus, imageUrl: urlFromBody } = req.body;
 
+        let imageUrl;
+        // Handle image upload similar to coursesService.js
+        if (req.file) {
+            imageUrl = await uploadToImgBB(req.file.buffer);
+        } else if (urlFromBody) {
+            // Use the provided URL if no file was uploaded
+            imageUrl = urlFromBody;
+        }
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({
                 success: false,
