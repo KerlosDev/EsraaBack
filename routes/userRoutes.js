@@ -7,7 +7,10 @@ const {
     getAllStudents,
     toggleBanStatus,
     updateLastActive,
-    getUserAllDataById
+    getUserAllDataById,
+    resetUserPassword,
+    deleteUser,
+    getEnrolledStudents
 } = require('../services/userServise');
 const WatchHistory = require('../modules/WatchHistory');
 const Enrollment = require('../modules/enrollmentModel');
@@ -46,7 +49,8 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
 
         // Get students with pagination
         const students = await User.find(searchQuery)
-            .select('name phoneNumber parentPhoneNumber email lastActive')
+            .select('name phoneNumber parentPhoneNumber email lastActive createdAt')
+            .sort({ createdAt: -1 }) // Sort by creation date (newest first)
             .lean()
             .skip(skip)
             .limit(limit);
@@ -62,49 +66,29 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
             });
         }
 
-        const Package = require("../modules/packageModel");
         const studentsStatus = await Promise.all(students.map(async (student) => {
-            // Get all enrollments (courses and packages)
+            // Check enrollments for paid courses and populate course details
             const enrollments = await Enrollment.find({
                 studentId: student._id,
-            })
-                .populate({
-                    path: 'courseId',
+            }).populate({
+                path: 'courseId',
+                populate: {
+                    path: 'chapters',
+                    model: 'Chapter',
                     populate: {
-                        path: 'chapters',
-                        model: 'Chapter',
-                        populate: {
-                            path: 'lessons',
-                            model: 'Lesson'
-                        }
+                        path: 'lessons',
+                        model: 'Lesson'
                     }
-                })
-                .populate({
-                    path: 'packageId',
-                    populate: {
-                        path: 'courses',
-                        model: 'Course',
-                        populate: {
-                            path: 'chapters',
-                            model: 'Chapter',
-                            populate: {
-                                path: 'lessons',
-                                model: 'Lesson'
-                            }
-                        }
-                    }
-                }) || [];
+                }
+            }) || [];
 
             // Check watch history
             const watchHistory = await WatchHistory.find({ studentId: student._id }) || [];
 
-            // Separate direct course enrollments and package enrollments
-            const directCourseEnrollments = enrollments.filter(e => e.courseId && !e.isPackage);
-            const packageEnrollments = enrollments.filter(e => e.packageId && e.isPackage);
-
-            // Get enrolled courses from direct enrollments
-            const directCourses = await Promise.all(directCourseEnrollments.map(async enrollment => {
+            // Get enrolled courses with their chapters and lessons
+            const enrolledCourses = await Promise.all(enrollments.map(async enrollment => {
                 const course = enrollment.courseId;
+
                 if (!course) {
                     return {
                         courseName: 'Unknown Course',
@@ -113,16 +97,23 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
                         chapters: []
                     };
                 }
+
+                // Map chapters and their lessons
                 const chapters = (course.chapters || []).map(chapter => ({
                     chapterTitle: chapter.title,
                     chapterDescription: chapter.description,
                     lessons: (chapter.lessons || []).map(lesson => ({
                         lessonTitle: lesson.title,
                         lessonDescription: lesson.description,
-                        isWatched: watchHistory.some(wh => wh.lessonId.toString() === lesson._id.toString()),
-                        watchCount: watchHistory.filter(wh => wh.lessonId.toString() === lesson._id.toString()).length
+                        isWatched: watchHistory.some(wh =>
+                            wh.lessonId.toString() === lesson._id.toString()
+                        ),
+                        watchCount: watchHistory.filter(wh =>
+                            wh.lessonId.toString() === lesson._id.toString()
+                        ).length
                     }))
                 }));
+
                 return {
                     courseName: course.name,
                     enrollmentDate: enrollment.createdAt,
@@ -130,37 +121,6 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
                     chapters: chapters
                 };
             }));
-
-            // Get enrolled courses from package enrollments
-            const packageCourses = [];
-            for (const pkgEnrollment of packageEnrollments) {
-                const pkg = pkgEnrollment.packageId;
-                if (pkg && Array.isArray(pkg.courses)) {
-                    for (const course of pkg.courses) {
-                        const chapters = (course.chapters || []).map(chapter => ({
-                            chapterTitle: chapter.title,
-                            chapterDescription: chapter.description,
-                            lessons: (chapter.lessons || []).map(lesson => ({
-                                lessonTitle: lesson.title,
-                                lessonDescription: lesson.description,
-                                isWatched: watchHistory.some(wh => wh.lessonId.toString() === lesson._id.toString()),
-                                watchCount: watchHistory.filter(wh => wh.lessonId.toString() === lesson._id.toString()).length
-                            }))
-                        }));
-                        packageCourses.push({
-                            courseName: course.name,
-                            enrollmentDate: pkgEnrollment.createdAt,
-                            paymentStatus: pkgEnrollment.paymentStatus,
-                            chapters: chapters,
-                            fromPackage: true,
-                            packageName: pkg.name || undefined
-                        });
-                    }
-                }
-            }
-
-            // Combine all enrolled courses (direct + from packages)
-            const enrolledCourses = [...directCourses, ...packageCourses];
 
             // Determine status based on both enrollment and watch history
             let status = 'not enrolled';
@@ -175,15 +135,16 @@ router.get('/all-students-status', isAdmin, async (req, res) => {
                 studentInfo: {
                     id: student._id,
                     name: student.name,
-                    lastActivity: student.lastActive || student.createdAt,
+                    lastActivity: student.lastActive,
                     email: student.email,
                     phoneNumber: student.phoneNumber || 'Not provided',
-                    parentPhoneNumber: student.parentPhoneNumber || 'Not provided'
+                    parentPhoneNumber: student.parentPhoneNumber || 'Not provided',
+                    createdAt: student.createdAt
                 },
                 enrollmentStatus: {
-                    isEnrolled: enrolledCourses.length > 0,
+                    isEnrolled: enrollments.length > 0,
                     enrolledCourses: enrolledCourses,
-                    totalEnrollments: enrolledCourses.length
+                    totalEnrollments: enrollments.length
                 },
                 activityStatus: {
                     status: status,
@@ -258,10 +219,15 @@ router.get('/', getUserByIdService);
 router.put('/update', updateUserbyId);
 router.put('/last-active', updateLastActive);
 
+// Admin route for enrolled students
+router.get('/enrolled-students', isAdmin, getEnrolledStudents);
+
 // Admin only routes
 router.use('/students', isAdmin);
 router.get('/students', getAllStudents);
 router.put('/students/:studentId/ban', toggleBanStatus);
+router.put('/students/:userId/reset-password', resetUserPassword);
+router.delete('/students/:userId', deleteUser);
 
 // Get all data for user by ID (admin only)
 router.get('/:id/all-data', isAdmin, getUserAllDataById);
